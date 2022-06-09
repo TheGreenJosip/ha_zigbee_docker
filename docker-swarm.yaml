@@ -1,0 +1,99 @@
+version: "3.7"
+services:
+  traefik:
+    image: "traefik:latest"
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.swarmMode=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=traefik
+      - --entrypoints.web.address=:80
+    ports:
+      - 80:80
+      - 8080:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik
+    environment:
+      - TZ=US/Los_Angeles
+    deploy:
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.api.rule=Host(`traefik.home`)
+        - traefik.http.routers.api.service=api@internal
+        - traefik.http.routers.api.entrypoints=web
+        - traefik.http.services.api.loadbalancer.server.port=8080
+
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    depends_on:
+      - traefik
+    networks:
+      - traefik
+    volumes:
+      - mosquitto:/mosquitto
+  
+  zigbee2mqtt:
+    depends_on:
+      - traefik
+      - mosquitto
+    image: koenkk/zigbee2mqtt:latest-dev
+    networks:
+      - traefik
+    volumes:
+      - zigbee2mqtt:/app/data
+    environment:
+      - TZ=America/Los_Angeles
+    deploy:
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.zigbee2mqtt.rule=Host(`zigbee2mqtt.home`)
+        - traefik.http.routers.zigbee2mqtt.entrypoints=web
+        - traefik.http.services.zigbee2mqtt.loadbalancer.server.port=8080
+  
+  homeassistant:
+    depends_on:
+      - traefik
+      - zigbee2mqtt
+    image: homeassistant/home-assistant:stable
+    networks:
+      - traefik
+    volumes:
+      - homeassistant:/config
+    environment:
+      - TZ=America/Los_Angeles #change to your timezone
+    deploy:
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.homeassistant.rule=Host(`home-assistant.home`)
+        - traefik.http.routers.homeassistant.entrypoints=web
+        - traefik.http.services.homeassistant.loadbalancer.server.port=8123
+
+  node-red:
+    image: nodered/node-red:latest
+    depends_on:
+      - traefik
+    environment:
+      - TZ=America/Los_Angeles
+    networks:
+      - traefik
+    volumes:
+      - nodered:/data
+    deploy:
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.nodered.rule=Host(`node-red.home`)
+        - traefik.http.routers.nodered.entrypoints=web
+        - traefik.http.services.nodered.loadbalancer.server.port=1880
+
+volumes:
+  mosquitto:
+  zigbee2mqtt:
+  homeassistant:
+  nodered:
+
+networks:
+  traefik:
+    external: true

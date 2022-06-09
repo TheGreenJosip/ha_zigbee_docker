@@ -1,0 +1,10 @@
+homeassistant: true
+permit_join: true
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://mosquitto:1883
+serial:
+  port: tcp://<<tasmota ip>>:8888 #update to match your static ip for Tasmota Sonoff ZBBridge
+  adapter: ezsp
+frontend:
+  port: 8080
