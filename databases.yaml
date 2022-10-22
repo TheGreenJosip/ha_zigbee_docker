@@ -1,0 +1,180 @@
+version: '3.8'
+services:
+#homeassistant
+  homeassistant:
+    image: homeassistant/raspberrypi4-64-homeassistant:latest
+    ports:
+      - "8443:8443"
+      - "51827:51827"
+      - "5353:5353"
+    volumes:
+      - /var/hacluster/homeassistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - traefik-public
+    environment:
+      - TZ=Europe/Berlin
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.port=8443"
+        - "traefik.backend=homeassistant"
+        - "traefik.http.routers.homeassistant.entrypoints=http"
+        - "traefik.http.routers.homeassistant.rule=Host(`home.ichundmeinewelt.com`)"
+        - "traefik.http.middlewares.homeassistant-https-redirect.redirectscheme.scheme=https"
+        - "traefik.http.routers.homeassistant.middlewares=homeassistant-https-redirect"
+        - "traefik.http.routers.homeassistant-secure.entrypoints=https"
+        - "traefik.http.routers.homeassistant-secure.rule=Host(`home.ichundmeinewelt.com`)"
+        - "traefik.http.routers.homeassistant-secure.tls=true"
+        - "traefik.http.routers.homeassistant-secure.service=homeassistant"
+        - "traefik.http.services.homeassistant.loadbalancer.server.port=8080"
+
+#config editor
+  hass-configurator:
+    image: "causticlab/hass-configurator-docker:latest"
+    ports:
+      - "3218:3218/tcp"
+    networks:
+      - traefik-public
+    volumes:
+      - "/var/hacluster/homeassistant/textconfigurator:/config"
+      - "/var/hacluster/homeassistant/config:/hass-config"
+    environment:
+      - HC_USERNAME=thegreenjo
+      - HC_PASSWORD=/run/secrets/hass_configurator_password
+      - HC_HASS_API_PASSWORD=/run/secrets/hass_api_password
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.port=3218"
+        - "traefik.backend=homeassistant-configurator"
+        - "traefik.http.routers.homeassistant-configurator.entrypoints=http"
+        - "traefik.http.routers.homeassistant-configurator.rule=Host(`configurator.ichundmeinewelt.com`)"
+        - "traefik.http.middlewares.homeassistant-configurator-https-redirect.redirectscheme.scheme=https"
+        - "traefik.http.routers.homeassistant-configurator.middlewares=homeassistant-https-redirect"
+        - "traefik.http.routers.homeassistant-configurator-secure.entrypoints=https"
+        - "traefik.http.routers.homeassistant-configurator-secure.rule=Host(`configurator.ichundmeinewelt.com`)"
+        - "traefik.http.routers.homeassistant-configurator-secure.tls=true"
+        - "traefik.http.routers.homeassistant-configurator-secure.service=homeassistant-configurator"
+        - "traefik.http.services.homeassistant-configurator.loadbalancer.server.port=3218"
+
+#influxDB
+  influxdb:
+    image: influxdb:latest
+    networks:
+      - traefik-public
+    ports:
+      - "8086:8086"
+      - "8083:8083"
+    environment:
+      INFLUXDB_DB: homeassistant
+      INFLUXDB_USER: thegreenjo
+      INFLUXDB_USER_PASSWORD: /run/secrets/influxdb_user_password
+    volumes:
+      - /var/hacluster/homeassistant/influxdb/:/var/lib/influxdb
+      - /etc/localtime:/etc/localtime:ro
+
+#grafana
+  grafana:
+    depends_on:
+      - influxdb
+    image: grafana/grafana:latest
+    networks:
+      - traefik-public
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,briangann-gauge-panel,natel-plotly-panel,grafana-simple-json-datasource
+    volumes:
+      - /var/hacluster/homeassistant/grafana/custom.ini:/etc/grafana/grafana.ini
+      - /var/hacluster/homeassistant/grafana/:/var/lib/grafana
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.port=3000"
+        - "traefik.backend=homeassistant-grafana"
+        - "traefik.http.routers.homeassistant-grafana.entrypoints=http"
+        - "traefik.http.routers.homeassistant-grafana.rule=Host(`homeassistant-grafana.ichundmeinewelt.com`)"
+        - "traefik.http.middlewares.homeassistant-grafana-https-redirect.redirectscheme.scheme=https"
+        - "traefik.http.routers.homeassistant-grafana.middlewares=homeassistant-https-redirect"
+        - "traefik.http.routers.homeassistant-grafana-secure.entrypoints=https"
+        - "traefik.http.routers.homeassistant-grafana-secure.rule=Host(`homeassistant-grafana.ichundmeinewelt.com`)"
+        - "traefik.http.routers.homeassistant-grafana-secure.tls=true"
+        - "traefik.http.routers.homeassistant-grafana-secure.service=homeassistant-grafana"
+        - "traefik.http.services.homeassistant-grafana.loadbalancer.server.port=3000"
+
+#mariadb
+  mariadb:
+    image: mariadb:latest
+    ports:
+      - 3306:3306
+    secrets:
+      - ha_db_password
+      - mysql_root_password
+    environment:
+      - MYSQL_USER=ENTERYOURUSER
+      - MYSQL_DATABASE=home_assistant
+      - MYSQL_PASSWORD_FILE=/run/secrets/ha_db_password
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/mysql_root_password
+    volumes:
+      - /var/hacluster/mariadb/db:/var/lib/mysql
+      - /var/hacluster/mariadb/my.cnf:/etc/mysql/my.cnf:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - traefik-public
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      replicas: 1
+      update_config:
+        parallelism: 2
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+
+#mariadb admin interface
+  adminer:
+    image: adminer
+    ports:
+      - 8280:8080
+    networks:
+      - traefik-public
+    deploy:
+      replicas: 1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.port=8280"
+        - "traefik.http.routers.adminer.entrypoints=http"
+        - "traefik.http.routers.adminer.rule=Host(`mariadb.ichundmeinewelt.com`)"
+        - "traefik.http.middlewares.adminer-https-redirect.redirectscheme.scheme=https"
+        - "traefik.http.routers.adminer.middlewares=adminer-https-redirect"
+        - "traefik.http.routers.adminer-secure.entrypoints=https"
+        - "traefik.http.routers.adminer-secure.rule=Host(`mariadb.ichundmeinewelt.com`)"
+        - "traefik.http.routers.adminer-secure.tls=true"
+        - "traefik.http.routers.adminer-secure.service=adminer"
+        - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+
+secrets:
+  ha_db_password:
+    external: true
+  mysql_root_password:
+    external: true
+  hass_configurator_password:
+    external: true
+  hass_api_password:
+    external: true
+  influxdb_user_password:
+    external: true
+
+networks:
+  traefik-public:
+    external: true

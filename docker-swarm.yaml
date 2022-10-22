@@ -1,39 +1,30 @@
 version: "3.7"
 services:
-  traefik:
-    image: "traefik:latest"
-    command:
-      - --api.insecure=true
-      - --providers.docker=true
-      - --providers.docker.swarmMode=true
-      - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=traefik
-      - --entrypoints.web.address=:80
-    ports:
-      - 80:80
-      - 8080:8080
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - traefik
-    environment:
-      - TZ=US/Los_Angeles
-    deploy:
-      labels:
-        - traefik.enable=true
-        - traefik.http.routers.api.rule=Host(`traefik.home`)
-        - traefik.http.routers.api.service=api@internal
-        - traefik.http.routers.api.entrypoints=web
-        - traefik.http.services.api.loadbalancer.server.port=8080
-
   mosquitto:
     image: eclipse-mosquitto:latest
     depends_on:
       - traefik
     networks:
-      - traefik
+      - traefik-public
+      - traefik-edge
     volumes:
-      - mosquitto:/mosquitto
+      - /var/hacluster/mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - /var/hacluster/mosquitto/config/mosquitto.passwd:/mosquitto/config/mosquitto.passwd
+      - /var/hacluster/mosquitto/log/mosquitto.log:/mosquitto/log/mosquitto.log
+      - /var/hacluster/mosquitto/data:/mosquitto/data
+    deploy:
+      placement:
+        constraints:
+          # This label is for later Green/Blue-Deployment
+          - node.labels.state == production
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.constraint-label=traefik-public
+        - traefik.tcp.routers.mqtt.rule=HostSNI(`*`)
+        - traefik.tcp.routers.mqtt.entrypoints=mqtt
+        - traefik.tcp.services.mqtt.loadbalancer.server.port=1883
+        - traefik.tcp.routers.mqtt.service=mqtt
   
   zigbee2mqtt:
     depends_on:
@@ -41,16 +32,28 @@ services:
       - mosquitto
     image: koenkk/zigbee2mqtt:latest-dev
     networks:
-      - traefik
+      - traefik-public
+      - traefik-edge
     volumes:
-      - zigbee2mqtt:/app/data
+      - /var/hacluster/homeassistant/zigbee2mqtt:/app/data
+      - /dev/zigbee-serial:/dev/zigbee-serial
     environment:
-      - TZ=America/Los_Angeles
+      - TZ=Europe/Vienna
     deploy:
+      placement:
+        constraints: [node.hostname == node2]
+      replicas: 1
       labels:
         - traefik.enable=true
-        - traefik.http.routers.zigbee2mqtt.rule=Host(`zigbee2mqtt.home`)
-        - traefik.http.routers.zigbee2mqtt.entrypoints=web
+        - traefik.docker.network=traefik-public
+        - traefik.constraint-label=traefik-public
+        - traefik.http.routers.zigbee2mqtt.rule=Host(`zigbee2mqtt.ichundmeinewelt.com`)
+        - traefik.http.routers.zigbee2mqtt.entrypoints=http
+        - traefik.http.routers.zigbee2mqtt-http.middlewares=https-redirect
+        - traefik.http.routers.zigbee2mqtt-https.rule=Host(`zigbee2mqtt.ichundmeinewelt.com`)
+        - traefik.http.routers.zigbee2mqtt-https.entrypoints=https
+        - traefik.http.routers.zigbee2mqtt-https.tls=true
+        - traefik.http.routers.zigbee2mqtt-https.tls.certresolver=le
         - traefik.http.services.zigbee2mqtt.loadbalancer.server.port=8080
   
   homeassistant:
@@ -58,42 +61,291 @@ services:
       - traefik
       - zigbee2mqtt
     image: homeassistant/home-assistant:stable
+    ports:
+      - "51827:51827"
+      - "5353:5353"
+      - "8123:8123"
     networks:
-      - traefik
+      - macvlan-swarm
+      - traefik-edge
+      - traefik-public
     volumes:
-      - homeassistant:/config
+      - /run/dbus:/run/dbus:ro
+      - /var/hacluster/homeassistant:/config
     environment:
-      - TZ=America/Los_Angeles #change to your timezone
+      - TZ=Europe/Vienna #change to your timezone
     deploy:
+      placement:
+        constraints:
+          # This label is for later Green/Blue-Deployment
+          - node.labels.state == production
       labels:
         - traefik.enable=true
-        - traefik.http.routers.homeassistant.rule=Host(`home-assistant.home`)
-        - traefik.http.routers.homeassistant.entrypoints=web
+        - traefik.docker.network=traefik-public
+        - traefik.constraint-label=traefik-public
+
+        - traefik.http.routers.homeassistant.rule=Host(`home.ichundmeinewelt.com`)
+        - traefik.http.routers.homeassistant.entrypoints=http
+        - traefik.http.routers.homeassistant-http.middlewares=https-redirect
+        - traefik.http.routers.homeassistant-https.rule=Host(`home.ichundmeinewelt.com`)
+        - traefik.http.routers.homeassistant-https.entrypoints=https
+        - traefik.http.routers.homeassistant-https.tls=true
+        - traefik.http.routers.homeassistant-https.tls.certresolver=le
         - traefik.http.services.homeassistant.loadbalancer.server.port=8123
+        # Sonos TCP-Communication
+        - traefik.tcp.routers.sonos.entrypoints=sonos
+        - traefik.tcp.routers.sonos.rule=HostSNI(`*`)
+        - traefik.tcp.services.sonos.loadbalancer.server.port=1400
+        - traefik.tcp.routers.sonos.service=sonos
 
   node-red:
     image: nodered/node-red:latest
     depends_on:
       - traefik
     environment:
-      - TZ=America/Los_Angeles
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Vienna
     networks:
-      - traefik
+      - traefik-public
     volumes:
-      - nodered:/data
+      - /var/hacluster/homeassistant/node-red:/data
     deploy:
+      placement:
+        constraints:
+          # This label is for later Green/Blue-Deployment
+          - node.labels.state == production
       labels:
         - traefik.enable=true
-        - traefik.http.routers.nodered.rule=Host(`node-red.home`)
-        - traefik.http.routers.nodered.entrypoints=web
+        - traefik.docker.network=traefik-public
+        - traefik.constraint-label=traefik-public
+        - traefik.http.routers.nodered.rule=Host(`nodered.ichundmeinewelt.com`)
+        - traefik.http.routers.nodered.entrypoints=http
+        - traefik.http.routers.nodered-http.middlewares=https-redirect
+        - traefik.http.routers.nodered-https.rule=Host(`nodered.ichundmeinewelt.com`)
+        - traefik.http.routers.nodered-https.entrypoints=https
+        - traefik.http.routers.nodered-https.tls.certresolver=le
+         # Enable HTTP Basic auth, using the middleware created above
+        - traefik.http.routers.nodered-https.middlewares=admin-auth
         - traefik.http.services.nodered.loadbalancer.server.port=1880
 
-volumes:
-  mosquitto:
-  zigbee2mqtt:
-  homeassistant:
-  nodered:
+  configurator:
+    image: causticlab/hass-configurator-docker:latest
+    depends_on:
+      - traefik
+    networks:
+      - traefik-public
+    volumes:
+      - /var/hacluster/homeassistant/textconfigurator:/config
+      - /var/hacluster/homeassistant:/hass-config
+    deploy:
+      placement:
+        constraints:
+          # This label is for later Green/Blue-Deployment
+          - node.labels.state == production
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.constraint-label=traefik-public
+        - traefik.http.routers.configurator.rule=Host(`config.ichundmeinewelt.com`)
+        - traefik.http.routers.configurator.entrypoints=http
+        - traefik.http.routers.configurator-http.middlewares=https-redirect
+        - traefik.http.routers.configurator-https.rule=Host(`config.ichundmeinewelt.com`)
+        - traefik.http.routers.configurator-https.entrypoints=https
+        - traefik.http.routers.configurator-https.tls.certresolver=le
+        - traefik.http.services.configurator.loadbalancer.server.port=3218
+
+  #influxDB
+  influxdb:
+    image: influxdb:2.2
+    restart: always
+    networks:
+      - traefik-public
+      - traefik-edge
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=thegreenjo
+      - DOCKER_INFLUXDB_INIT_PASSWORD=t3VoW5vxiET7l9Y
+      - DOCKER_INFLUXDB_INIT_ORG=ichundmeinewelt
+      - DOCKER_INFLUXDB_INIT_BUCKET=homeassistant
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=h6P6mAlZ6KL5ABN8uvVTEg334s3IhmPraiDIt63qLxrVuDV-HChwBVTq_8ScmiSpzvEI-TdsjefUvL9OJ1AvNA==
+      - INFLUXD_LOG_LEVEL=warn
+      - TZ=Europe/Vienna
+    volumes:
+      - /var/hacluster/homeassistant/influx:/var/lib/influxdb2
+      - /var/hacluster/homeassistant/influx/conf:/etc/influxdb2
+    deploy:
+      placement:
+        constraints:
+          # This label is for later Green/Blue-Deployment
+          - node.labels.state == production
+
+  #mariadb
+  mariadb:
+    image: mariadb:latest
+    secrets:
+      - ha_db_password
+      - mysql_root_password
+    environment:
+      - MYSQL_USER=thegreenjo
+      - MYSQL_DATABASE=homeassistant
+      - MYSQL_PASSWORD_FILE=/run/secrets/ha_db_password
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/mysql_root_password
+    volumes:
+      - /var/hacluster/homeassistant/mariadb/db:/var/lib/mysql
+      - /var/hacluster/homeassistant/mariadb/my.cnf:/etc/mysql/my.cnf
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - traefik-public
+      - traefik-edge
+    deploy:
+      labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.constraint-label=traefik-public
+      - traefik.tcp.routers.mariadb.rule=HostSNI(`*`)
+      - traefik.tcp.routers.mariadb.entrypoints=mariadb
+      - traefik.tcp.services.mariadb.loadbalancer.server.port=3306
+      - traefik.tcp.routers.mariadb.service=mariadb
+      placement:
+        constraints: [node.role == manager] # Here this also leads to the same result as label state=prod/stage
+      replicas: 1
+      update_config:
+        parallelism: 2
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+
+  # AppDeamon
+  appdaemon:
+    image: acockburn/appdaemon:latest
+    restart: unless-stopped
+    environment:
+      - HA_URL=http://192.168.1.26:8123
+      - TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJmOGU1YmQxMzY3YmI0Y2ZkYWU5MTk2YzkxZDM5MmFmZCIsImlhdCI6MTY2NTg2OTUwOCwiZXhwIjoxOTgxMjI5NTA4fQ.kPMBfAfInSh7IiZyt0qV7_FvPqMaVHLrtXKkV1FnPAI
+    ports:
+      - "5050:5050"
+    volumes:
+      - /var/hacluster/homeassistant/appdaemon:/conf
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - traefik-public
+      - traefik-edge
+    depends_on:
+      - homeassistant
+    deploy:
+      placement:
+        constraints:
+          # This label is for later Green/Blue-Deployment
+          - node.labels.state == production
+    
+  #grafana
+  grafana:
+    depends_on:
+      - influxdb
+    image: grafana/grafana:latest
+    networks:
+      - traefik-public
+      - traefik-edge
+#    ports:
+#      - "3000:3000"
+    user: "0"
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,briangann-gauge-panel,natel-plotly-panel,grafana-simple-json-datasource
+    volumes:
+#      - /var/hacluster/homeassistant/grafana/custom.ini:/etc/grafana/grafana.ini
+      - /var/hacluster/homeassistant/grafana/:/var/lib/grafana
+    deploy:
+      placement:
+        constraints:
+          # This label is for later Green/Blue-Deployment
+          - node.labels.state == production
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.constraint-label=traefik-public"
+        - "traefik.backend=homeassistant-grafana"
+        - "traefik.http.routers.homeassistant-grafana.entrypoints=http"
+        - "traefik.http.routers.homeassistant-grafana.rule=Host(`grafana.ichundmeinewelt.com`)"
+        - "traefik.http.routers.homeassistant-grafana-http.middlewares=https-redirect"
+        - "traefik.http.routers.homeassistant-grafana-secure.rule=Host(`grafana.ichundmewinewelt.com`)"
+        - "traefik.http.routers.homeassistant-grafana-secure.entrypoints=https"
+        - "traefik.http.routers.homeassistant-grafana-https.tls.certresolver=le"
+        - "traefik.http.services.homeassistant-grafana.loadbalancer.server.port=3000"
+
+  #mariadb admin interface
+  adminer:
+    image: adminer
+    ports:
+      - 8280:8080
+    networks:
+      - traefik-public
+      - traefik-edge
+    deploy:
+      placement:
+        constraints:
+          # This label is for later Green/Blue-Deployment
+          - node.labels.state == production
+      replicas: 1
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.constraint-label=traefik-public
+        - traefik.http.routers.adminer.rule=Host(`mariadb.ichundmeinewelt.com`)
+        - traefik.http.routers.adminer.entrypoints=http
+        - traefik.http.routers.adminer-http.middlewares=https-redirect
+        - traefik.http.routers.adminer-https.rule=Host(`mariadb.ichundmeinewelt.com`)
+        - traefik.http.routers.adminer-https.entrypoints=https
+        - traefik.http.routers.adminer-https.tls.certresolver=le
+        - traefik.http.services.adminer.loadbalancer.server.port=8080 
+
+  #ESP-Home
+  esphome:
+    image: esphome/esphome
+    volumes:
+        - /var/hacluster/homeassistant/esphome/config/:/config
+        - /etc/localtime:/etc/localtime:ro
+    networks:
+      - traefik-public
+      - macvlan-swarm
+    deploy:
+      placement:
+        constraints:
+          # This label is for later Green/Blue-Deployment
+          - node.labels.state == production
+      replicas: 1
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.constraint-label=traefik-public
+        - traefik.http.routers.esphome.rule=Host(`esphome.ichundmeinewelt.com`)
+        - traefik.http.routers.esphome.entrypoints=http
+        - traefik.http.routers.esphome-http.middlewares=https-redirect
+        - traefik.http.routers.esphome-https.rule=Host(`esphome.ichundmeinewelt.com`)
+        - traefik.http.routers.esphome-https.entrypoints=https
+        - traefik.http.routers.esphome-https.tls.certresolver=le
+        - traefik.http.services.esphome.loadbalancer.server.port=6052
+
+secrets:
+  ha_db_password:
+    external: true
+  mysql_root_password:
+    external: true
+  hass_configurator_password:
+    external: true
+  hass_api_password:
+    external: true
+  influxdb_user_password:
+    external: true
+
 
 networks:
-  traefik:
+  traefik-public:
+    external: true
+  traefik-edge:
+    external: true
+  macvlan-swarm:
+    attachable: true
     external: true

@@ -1,0 +1,5 @@
+# Enable ssh-remote-shutdown
+
+in /etc/sudoer add following line with the appropriate username
+
+    username ALL = NOPASSWD: /sbin/shutdown

@@ -1,0 +1,18 @@
+# To-do's Cluster <-> Staging Portierung + neue Ideen 
+
+- AppDaemon custom image + Dockerfile mit dependencies (wird jedes mal aufs neue runtergeladen) 
+  --> https://community.home-assistant.io/t/using-custom-python-libs-in-a-docker-with-appdaemon/66167/3
+- Namensauflösung Docker Swarm
+- WOL - MacvLan
+- traefik routing für HTTP-services + basic-auth!!
+- Roborock lovelace --> Zusatz-Optionen Auswahl,  evtl. irgendwo in einem Backup?
+
+# Frage??
+ - Wenn im ansible-playbook vorkommender Ordner bereits da ist - was passiert mit dem Inhalt? Wird er überschrieben??
+
+ # Docker-Swarm Discovery Service
+ - Welches soll ich nehmen - Consul etcd oder Zookeeper? --> production use
+  --> nicer link: https://gdevillele.github.io/swarm/plan-for-production/
+
+# Blue-Green-Deployment mit traefik 
+https://github.com/rodolpheche/bluegreen-traefik-docker

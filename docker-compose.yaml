@@ -91,7 +91,7 @@ volumes:
   nodered:
 
 networks:
-  traefik:
+  traefik-public:
     driver: bridge
     enable_ipv6: false
     ipam:
